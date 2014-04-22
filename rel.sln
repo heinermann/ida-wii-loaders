@@ -1,0 +1,21 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 11.00
+# Visual C++ Express 2010
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "rel", "rel\rel.vcxproj", "{ADB0C12F-B09A-4220-9B1D-1F434B7610B0}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "dol", "dol\dol.vcxproj", "{541160E9-D9B8-47ED-8934-62E76E7BBC01}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Release|Win32 = Release|Win32
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{ADB0C12F-B09A-4220-9B1D-1F434B7610B0}.Release|Win32.ActiveCfg = Release|Win32
+		{ADB0C12F-B09A-4220-9B1D-1F434B7610B0}.Release|Win32.Build.0 = Release|Win32
+		{541160E9-D9B8-47ED-8934-62E76E7BBC01}.Release|Win32.ActiveCfg = Release|Win32
+		{541160E9-D9B8-47ED-8934-62E76E7BBC01}.Release|Win32.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
