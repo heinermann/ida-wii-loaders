@@ -53,7 +53,7 @@
     <Link>
       <LinkDLL>true</LinkDLL>
       <SubSystem>Windows</SubSystem>
-      <AdditionalOptions> /export:LDSC  /stub:STUB </AdditionalOptions>
+      <AdditionalOptions> /export:LDSC  /stub:../loader/STUB </AdditionalOptions>
       <AdditionalDependencies>ida.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
