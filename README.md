@@ -1,5 +1,7 @@
 # REL & DOL Loader plugins for IDA Pro
 
+The REL and DOL files are found in Nintendo Gamecube/Wii games. This repository is focused on loading the REL files.
+
 ## Environment
 * Visual C++ 2010 Express
 * IDA Pro 6.1 SDK
