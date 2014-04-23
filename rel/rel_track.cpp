@@ -1,5 +1,7 @@
 #include "rel_track.h"
 #include <string>
+#include <sstream>
+#include <iomanip>
 
 rel_track::rel_track(linput_t *p_input)
  : m_valid(false)
@@ -36,7 +38,7 @@ bool rel_track::read_header()
   relhdr base_header;
   qlseek(m_input_file, 0, SEEK_SET);
   if (qlread(m_input_file, &base_header, sizeof(base_header)) != sizeof(base_header))
-    return err_msg("REL: header is too short or inaccessible\n");
+    return err_msg("REL: header is too short or inaccessible");
 
   // Convert all members from big endian to little endian
   m_id             = swap32(base_header.info.id);
@@ -169,7 +171,7 @@ bool rel_track::apply_patches(bool dry_run)
 
 bool rel_track::create_sections(bool dry_run)
 {
-  uint32_t last_offset = 0;
+  m_next_section_offset = 0;
 
   // Create sections
   for (size_t i = 0; i < m_sections.size(); ++i)
@@ -182,16 +184,16 @@ bool rel_track::create_sections(bool dry_run)
 
     std::string type = (entry.offset & SECTION_EXEC) ? CLASS_CODE : CLASS_DATA;
     std::string name = (entry.offset & SECTION_EXEC) ? NAME_CODE : NAME_DATA;
-    name += std::to_string((unsigned long long)i);
+    name += std::to_string(static_cast<unsigned long long>(i));
 
     uint32_t offset = SECTION_OFF(entry.offset);
 
     // Create the segment
     if ( offset != 0 )  // known segment
     {
-      if ( offset < last_offset )
+      if ( offset < m_next_section_offset )
         return err_msg("Segments are not linear (seg #%u)", i);
-      last_offset = offset + entry.size;
+      m_next_section_offset = offset + entry.size;
 
       if (!add_segm(1, START + offset, START + offset + entry.size, name.c_str(), type.c_str()))
         return err_msg("Failed to create segment #%u", i);
@@ -204,7 +206,8 @@ bool rel_track::create_sections(bool dry_run)
     }
     else  // .bss section
     {
-      offset = last_offset;
+      offset = m_next_section_offset;
+      m_next_section_offset += entry.size;
       entry.offset = offset;
 
       if (!add_segm(1, START + offset, START + offset + entry.size, NAME_BSS, CLASS_BSS))
@@ -230,6 +233,9 @@ bool rel_track::apply_relocations(bool dry_run)
       import_entry entry;
       if (qlread(m_input_file, &entry, sizeof(entry)) != sizeof(entry))
         return err_msg("REL: Failed to read relocation data %u", i);
+      // Endianness
+      entry.offset = swap32(entry.offset);
+      entry.id = swap32(entry.id);
 
       // Seek to relocations
       qlseek(m_input_file, entry.offset, SEEK_SET);
@@ -245,7 +251,7 @@ bool rel_track::apply_relocations(bool dry_run)
           // Read operation
           rel_entry rel;
           if (qlread(m_input_file, &rel, sizeof(rel)) != (sizeof(rel)))
-            return err_msg("REL: Failed to read relocation operation");
+            return err_msg("REL: Failed to read relocation operation @0x%08X - error code: %d", qltell(m_input_file), get_qerrno());
 
           // endianness
           rel.addend = swap32(rel.addend);
@@ -291,9 +297,127 @@ bool rel_track::apply_relocations(bool dry_run)
 
         }
       }
-      else
+      else // EXTERNALS
       {
-        msg("REL: Other imports not yet supported\n");
+        // Read all imports to get the desired size
+        for (;;)
+        {
+          // Read operation
+          rel_entry rel;
+          if ( qlread(m_input_file, &rel, sizeof(rel)) != (sizeof(rel)))
+            return err_msg("REL: Failed to read relocation operation @0x%08X, id %u", qltell(m_input_file), entry.id);
+
+          // endianness
+          rel.addend = swap32(rel.addend);
+          rel.offset = swap16(rel.offset);
+
+          // Kill if it's the end
+          if (rel.type == R_DOLPHIN_END)
+            break;
+
+          std::string imp_module_name = "base";
+          if ( entry.id != 0 )
+            imp_module_name = std::string("module") + std::to_string(static_cast<unsigned long long>(entry.id));
+
+          m_imports[imp_module_name].emplace_back(rel);
+        }
+      }
+    } // for each module
+
+    // Retrieve the desired size of the imports section
+    uint32_t desired_size = 0;
+    for ( auto it = m_imports.begin(); it != m_imports.end(); ++it )
+      desired_size += it->second.size();
+    desired_size *= 4;
+
+    section_entry import_section = { m_next_section_offset, desired_size };
+    m_next_section_offset += desired_size;
+
+    // Now create the import/externals section
+    if (!add_segm(1, START + import_section.offset, START + import_section.offset + import_section.size, NAME_EXTERN, CLASS_EXTERN))
+      return err_msg("Failed to create XTRN segment");
+    set_segm_addressing(getseg(START + import_section.offset), 1);
+    
+    m_import_section = static_cast<uint8_t>(m_sections.size());
+    m_sections.emplace_back(import_section);
+
+    // Add and parse imports
+    ea_t targ_offset = this->section_address(m_import_section);
+    for ( auto it = m_imports.begin(); it != m_imports.end(); ++it )
+    {
+      describe(targ_offset, true, "\nModule %s\n", it->first.c_str());
+
+      uint32_t current_offset = 0, current_section = 0;
+      for ( auto e = it->second.begin(); e != it->second.end(); ++e )
+      {
+        current_offset += e->offset;
+        switch (e->type)
+        {
+        case R_DOLPHIN_SECTION:
+          current_section = e->section;
+          current_offset  = 0;
+          break;
+        case R_DOLPHIN_NOP:
+          break;
+        case R_PPC_ADDR32:
+        {
+          patch_long( this->section_address(current_section, current_offset), targ_offset );
+          put_long(targ_offset, e->addend);
+
+          std::ostringstream ss;
+          ss << it->first.c_str() << "_s" << static_cast<unsigned int>(e->section) << "_ADDR32_" << reinterpret_cast<void*>(e->addend);
+          do_name_anyway(targ_offset, ss.str().c_str());
+
+          targ_offset += 4;
+          break;
+        }
+        case R_PPC_ADDR16_LO:
+        {
+          patch_word(this->section_address(current_section, current_offset), targ_offset & 0xFFFF);
+          put_long(targ_offset, e->addend);
+          
+          std::ostringstream ss;
+          ss << it->first.c_str() << "_s" << static_cast<unsigned int>(e->section) << "_ADDR16_LO_" << reinterpret_cast<void*>(e->addend);
+          do_name_anyway(targ_offset, ss.str().c_str());
+
+          targ_offset += 4;
+          break;
+        }
+        case R_PPC_ADDR16_HA:
+        {
+          ea_t value = targ_offset;
+          if ((value & 0x8000) == 0x8000)
+            value += 0x00010000;
+
+          patch_word(this->section_address(current_section, current_offset), (value >> 16) & 0xFFFF);
+          put_long(targ_offset, e->addend);
+          
+          std::ostringstream ss;
+          ss << it->first.c_str() << "_s" << static_cast<unsigned int>(e->section) << "_ADDR16_HA_" << reinterpret_cast<void*>(e->addend);
+          do_name_anyway(targ_offset, ss.str().c_str());
+
+          targ_offset += 4;
+          break;
+        }
+        case R_PPC_REL24:
+        {
+          ea_t where = this->section_address(current_section, current_offset);
+          ea_t value = targ_offset;
+          value -= where;
+          uint32_t orig = static_cast<uint32_t>(get_original_long(where));
+          orig &= 0xFC000003;
+          orig |= value & 0x03FFFFFC;
+          patch_long(where, orig);
+
+          std::ostringstream ss;
+          ss << it->first.c_str() << "_s" << static_cast<unsigned int>(e->section) << "_REL24_" << reinterpret_cast<void*>(e->addend);
+          do_name_anyway(targ_offset, ss.str().c_str());
+
+          targ_offset += 4;
+        }
+        default:
+          msg("REL: RELOC TYPE %u UNSUPPORTED\n", static_cast<unsigned int>(e->type));
+        }
       }
     }
   }
@@ -312,9 +436,11 @@ bool rel_track::apply_names(bool dry_run)
   auto_make_proc(prolog_addr);
   auto_make_proc(unresolved_addr);
 
-  set_name(epilog_addr, "__epilog", SN_NOCHECK | SN_PUBLIC);
-  set_name(prolog_addr, "__prolog", SN_NOCHECK | SN_PUBLIC);
-  set_name(unresolved_addr, "__unresolved", SN_NOCHECK | SN_PUBLIC);
+  set_name(epilog_addr, "epilog", SN_NOCHECK | SN_PUBLIC);
+  set_name(prolog_addr, "prolog", SN_NOCHECK | SN_PUBLIC);
+  set_name(unresolved_addr, "unresolved", SN_NOCHECK | SN_PUBLIC);
+
+  // TODO: Make exports
 
   set_libitem(epilog_addr);
   set_libitem(prolog_addr);

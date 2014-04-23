@@ -3,6 +3,7 @@
 
 #include "rel.h"
 #include <vector>
+#include <map>
 
 struct fxn_naming_entry
 {
@@ -53,6 +54,10 @@ private:
   bool m_valid;
   uint32_t m_max_filesize;
   linput_t * m_input_file;
+
+  uint32_t m_next_section_offset;
+  uint8_t m_import_section;
+  std::map<std::string, std::vector<rel_entry> > m_imports;
 
   std::vector<section_entry> m_sections;
 

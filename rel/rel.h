@@ -13,10 +13,7 @@
 #include "../loader/idaloader.h"
 
 #include <cstdint>
-#include <vector>
-
-#define CLASS_EXTERN "XTRN"
-
+#include <string>
 
 
 typedef struct {
@@ -133,7 +130,11 @@ inline bool err_msg(const char *format, ...)
 {
   va_list va;
   va_start(va, format);
-  int nbytes = vmsg(format, va);
+  
+  std::string fmt_nl = format;
+  fmt_nl += "\n";
+
+  int nbytes = vmsg(fmt_nl.c_str(), va);
   va_end(va);
   return false;
 }
