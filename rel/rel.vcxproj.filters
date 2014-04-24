@@ -29,5 +29,8 @@
     <ClInclude Include="rel_track.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\loader\idaloader.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

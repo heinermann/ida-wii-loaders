@@ -62,6 +62,7 @@
     <ClCompile Include="rel_track.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\loader\idaloader.h" />
     <ClInclude Include="rel.h" />
     <ClInclude Include="rel_track.h" />
   </ItemGroup>

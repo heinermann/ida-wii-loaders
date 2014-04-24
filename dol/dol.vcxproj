@@ -61,6 +61,7 @@
     <ClCompile Include="dol.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\loader\idaloader.h" />
     <ClInclude Include="dol.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

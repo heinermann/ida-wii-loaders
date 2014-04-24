@@ -123,6 +123,8 @@ void idaapi load_file(linput_t *fp, ushort /*neflag*/, const char * /*fileformat
   if ( ph.id != PLFM_PPC )
     set_processor_type("PPC", SETPROC_ALL|SETPROC_FATAL);
 
+  set_compiler_id(COMP_GNU);
+
   // read DOL header into memory
   if (read_header(fp, &dhdr)==0) qexit(1);
   

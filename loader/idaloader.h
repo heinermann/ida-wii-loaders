@@ -16,6 +16,7 @@
 #include <diskio.hpp>
 #include <kernwin.hpp>
 #include <nalt.hpp>
+#include <typeinf.hpp>
 
 #define CLASS_CODE    "CODE"
 #define NAME_CODE     ".text"
