@@ -225,6 +225,7 @@ bool rel_track::apply_relocations(bool dry_run)
   if (m_import_offset > 0)
   {
     uint32_t count = m_import_size / sizeof(import_entry);
+    uint32_t desired_import_size = 0;
     for (unsigned i = 0; i < count; ++i)
     {
       qlseek(m_input_file, m_import_offset + i*sizeof(import_entry), SEEK_SET);
@@ -291,6 +292,7 @@ bool rel_track::apply_relocations(bool dry_run)
             orig &= 0xFC000003;
             orig |= value & 0x03FFFFFC;
             patch_long(where, orig);
+            break;
           default:
             msg("REL: RELOC TYPE %u UNSUPPORTED\n", rel.type);
           }
@@ -315,6 +317,9 @@ bool rel_track::apply_relocations(bool dry_run)
           if (rel.type == R_DOLPHIN_END)
             break;
 
+          if ( rel.type != R_DOLPHIN_NOP )
+            desired_import_size += 4;
+
           std::string imp_module_name = "base";
           if ( entry.id != 0 )
             imp_module_name = std::string("module") + std::to_string(static_cast<unsigned long long>(entry.id));
@@ -323,15 +328,9 @@ bool rel_track::apply_relocations(bool dry_run)
         }
       }
     } // for each module
-
-    // Retrieve the desired size of the imports section
-    uint32_t desired_size = 0;
-    for ( auto it = m_imports.begin(); it != m_imports.end(); ++it )
-      desired_size += it->second.size();
-    desired_size *= 4;
-
-    section_entry import_section = { m_next_section_offset, desired_size };
-    m_next_section_offset += desired_size;
+    
+    section_entry import_section = { m_next_section_offset, desired_import_size };
+    m_next_section_offset += desired_import_size;
 
     // Now create the import/externals section
     if (!add_segm(1, START + import_section.offset, START + import_section.offset + import_section.size, NAME_EXTERN, CLASS_EXTERN))
@@ -414,9 +413,10 @@ bool rel_track::apply_relocations(bool dry_run)
           do_name_anyway(targ_offset, ss.str().c_str());
 
           targ_offset += 4;
+          break;
         }
         default:
-          msg("REL: RELOC TYPE %u UNSUPPORTED\n", static_cast<unsigned int>(e->type));
+          msg("REL: XTRN RELOC TYPE %u UNSUPPORTED\n", static_cast<unsigned int>(e->type));
         }
       }
     }
