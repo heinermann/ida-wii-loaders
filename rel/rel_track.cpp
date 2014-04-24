@@ -3,6 +3,8 @@
 #include <sstream>
 #include <iomanip>
 #include <fstream>
+#include <utility>
+#include <algorithm>
 
 rel_track::rel_track(linput_t *p_input)
  : m_valid(false)
@@ -228,6 +230,9 @@ bool rel_track::apply_relocations(bool dry_run)
   {
     uint32_t count = m_import_size / sizeof(import_entry);
     uint32_t desired_import_size = 0;
+    std::map< std::string, std::map<uint32_t, ea_t> > imports_map;
+    std::map< std::string, ea_t > imports_module_starts;
+
     for (unsigned i = 0; i < count; ++i)
     {
       qlseek(m_input_file, m_import_offset + i*sizeof(import_entry), SEEK_SET);
@@ -328,17 +333,25 @@ bool rel_track::apply_relocations(bool dry_run)
             break;
 
           if ( rel.type != R_DOLPHIN_SECTION && rel.type != R_DOLPHIN_NOP )
-            desired_import_size += 4;
+          {
+            // If the address was not already found, then get the next import location
+            ea_t target_offset = START + m_next_section_offset + desired_import_size;
+            if ( imports_map[imp_module_name].insert( std::make_pair(rel.addend, target_offset) ).second )
+            {
+              imports_module_starts.insert( std::make_pair(imp_module_name, target_offset) );
+              desired_import_size += 4;
+            }
+          }
 
           m_imports[imp_module_name].emplace_back(rel);
         }
       }
     } // for each module
     
+    // Now create the import/externals section
     section_entry import_section = { m_next_section_offset, desired_import_size };
     m_next_section_offset += desired_import_size;
 
-    // Now create the import/externals section
     if (!add_segm(1, START + import_section.offset, START + import_section.offset + import_section.size, NAME_EXTERN, CLASS_EXTERN))
       return err_msg("Failed to create XTRN segment");
     set_segm_addressing(getseg(START + import_section.offset), 1);
@@ -347,17 +360,30 @@ bool rel_track::apply_relocations(bool dry_run)
     m_sections.emplace_back(import_section);
 
     // Add and parse imports
-    ea_t targ_offset = this->section_address(m_import_section);
+    //ea_t targ_offset = this->section_address(m_import_section);
     for ( auto it = m_imports.begin(); it != m_imports.end(); ++it )
     {
-      describe(targ_offset, true, "\nModule %s\n", it->first.c_str()); // comment on the module
+      // Add comment for module
+      ea_t target_module_start = imports_module_starts[it->first];
+      if ( target_module_start == 0 )
+        return err_msg("Failed to locate start of module imports.");
+      add_long_cmt( target_module_start, true, "\nImports from %s\n", it->first.c_str() );
 
+      // Iterate relocation opcodes
       uint32_t current_offset = 0, current_section = 0;
       for ( auto e = it->second.begin(); e != it->second.end(); ++e )
       {
-        // Name the import
+        ea_t targ_offset; // this must be initialized for anything that isn't DOLPHIN_SECTION or DOLPHIN_NOP
+        
+        // If something is actually going to be done with the target
         if ( e->type != R_DOLPHIN_SECTION && e->type != R_DOLPHIN_NOP )
         {
+          // Retrieve the target offset for the import
+          targ_offset = imports_map[it->first][e->addend];
+          if ( targ_offset == 0 )
+            return err_msg("Import was not mapped correctly. %s %08X", it->first.c_str(), e->addend);
+
+          // Name the import
           std::ostringstream ss;
           ss << it->first.c_str() << '_' << reinterpret_cast<void*>(e->addend);
           do_name_anyway(targ_offset, ss.str().c_str());
@@ -408,14 +434,8 @@ bool rel_track::apply_relocations(bool dry_run)
         default:
           msg("REL: XTRN RELOC TYPE %u UNSUPPORTED\n", static_cast<unsigned int>(e->type));
         }
-
-        // Import was used, increment the position
-        if ( e->type != R_DOLPHIN_SECTION && e->type != R_DOLPHIN_NOP )
-        {
-          targ_offset += 4;
-        }
       }
-    }
+    } // for each import
   }
   return true;
 }
