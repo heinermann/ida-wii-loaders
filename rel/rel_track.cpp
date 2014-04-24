@@ -474,7 +474,7 @@ void rel_track::init_resolvers()
   // Load the module names
   m_module_names.clear();
   std::ifstream modid(path + "/module_id.txt");
-  while( modid >> std::hex >> id >> name )
+  while( modid >> id >> name )
     m_module_names[id] = name;
 
   // Load the function names
