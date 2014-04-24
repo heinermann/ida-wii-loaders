@@ -447,17 +447,12 @@ bool rel_track::apply_names(bool dry_run)
   ea_t prolog_addr = section_address(m_prolog_prep.m_section_id, m_prolog_prep.m_offset);
   ea_t unresolved_addr = section_address(m_unresolved_prep.m_section_id, m_unresolved_prep.m_offset);
 
-  // Make functions
-  auto_make_proc(epilog_addr);
-  auto_make_proc(prolog_addr);
-  auto_make_proc(unresolved_addr);
+  // Make function exports
+  add_entry(epilog_addr, epilog_addr, "epilog", true);
+  add_entry(prolog_addr, prolog_addr, "prolog", true);
+  add_entry(unresolved_addr, unresolved_addr, "unresolved", true);
 
-  set_name(epilog_addr, "epilog", SN_NOCHECK | SN_PUBLIC);
-  set_name(prolog_addr, "prolog", SN_NOCHECK | SN_PUBLIC);
-  set_name(unresolved_addr, "unresolved", SN_NOCHECK | SN_PUBLIC);
-
-  // TODO: Make exports
-
+  // Make library functions (emphasis)
   set_libitem(epilog_addr);
   set_libitem(prolog_addr);
   set_libitem(unresolved_addr);
