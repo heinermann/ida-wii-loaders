@@ -2,6 +2,7 @@
 #include <string>
 #include <sstream>
 #include <iomanip>
+#include <fstream>
 
 rel_track::rel_track(linput_t *p_input)
  : m_valid(false)
@@ -220,7 +221,8 @@ bool rel_track::create_sections(bool dry_run)
 }
 bool rel_track::apply_relocations(bool dry_run)
 {
-  
+  this->init_resolvers(); // initialize user-names
+
   // Apply relocations
   if (m_import_offset > 0)
   {
@@ -301,6 +303,14 @@ bool rel_track::apply_relocations(bool dry_run)
       }
       else // EXTERNALS
       {
+        // Retrieve the module name
+        std::string imp_module_name = "base";
+        auto it_modname = m_module_names.find(entry.id);
+        if ( it_modname != m_module_names.end() )
+          imp_module_name = it_modname->second;
+        else
+          imp_module_name = std::string("module") + std::to_string(static_cast<unsigned long long>(entry.id));
+
         // Read all imports to get the desired size
         for (;;)
         {
@@ -317,12 +327,8 @@ bool rel_track::apply_relocations(bool dry_run)
           if (rel.type == R_DOLPHIN_END)
             break;
 
-          if ( rel.type != R_DOLPHIN_NOP )
+          if ( rel.type != R_DOLPHIN_SECTION && rel.type != R_DOLPHIN_NOP )
             desired_import_size += 4;
-
-          std::string imp_module_name = "base";
-          if ( entry.id != 0 )
-            imp_module_name = std::string("module") + std::to_string(static_cast<unsigned long long>(entry.id));
 
           m_imports[imp_module_name].emplace_back(rel);
         }
@@ -344,11 +350,19 @@ bool rel_track::apply_relocations(bool dry_run)
     ea_t targ_offset = this->section_address(m_import_section);
     for ( auto it = m_imports.begin(); it != m_imports.end(); ++it )
     {
-      describe(targ_offset, true, "\nModule %s\n", it->first.c_str());
+      describe(targ_offset, true, "\nModule %s\n", it->first.c_str()); // comment on the module
 
       uint32_t current_offset = 0, current_section = 0;
       for ( auto e = it->second.begin(); e != it->second.end(); ++e )
       {
+        // Name the import
+        if ( e->type != R_DOLPHIN_SECTION && e->type != R_DOLPHIN_NOP )
+        {
+          std::ostringstream ss;
+          ss << it->first.c_str() << '_' << reinterpret_cast<void*>(e->addend);
+          do_name_anyway(targ_offset, ss.str().c_str());
+        }
+
         current_offset += e->offset;
         switch (e->type)
         {
@@ -362,24 +376,12 @@ bool rel_track::apply_relocations(bool dry_run)
         {
           patch_long( this->section_address(current_section, current_offset), targ_offset );
           put_long(targ_offset, e->addend);
-
-          std::ostringstream ss;
-          ss << it->first.c_str() << "_s" << static_cast<unsigned int>(e->section) << "_ADDR32_" << reinterpret_cast<void*>(e->addend);
-          do_name_anyway(targ_offset, ss.str().c_str());
-
-          targ_offset += 4;
           break;
         }
         case R_PPC_ADDR16_LO:
         {
           patch_word(this->section_address(current_section, current_offset), targ_offset & 0xFFFF);
           put_long(targ_offset, e->addend);
-          
-          std::ostringstream ss;
-          ss << it->first.c_str() << "_s" << static_cast<unsigned int>(e->section) << "_ADDR16_LO_" << reinterpret_cast<void*>(e->addend);
-          do_name_anyway(targ_offset, ss.str().c_str());
-
-          targ_offset += 4;
           break;
         }
         case R_PPC_ADDR16_HA:
@@ -390,12 +392,6 @@ bool rel_track::apply_relocations(bool dry_run)
 
           patch_word(this->section_address(current_section, current_offset), (value >> 16) & 0xFFFF);
           put_long(targ_offset, e->addend);
-          
-          std::ostringstream ss;
-          ss << it->first.c_str() << "_s" << static_cast<unsigned int>(e->section) << "_ADDR16_HA_" << reinterpret_cast<void*>(e->addend);
-          do_name_anyway(targ_offset, ss.str().c_str());
-
-          targ_offset += 4;
           break;
         }
         case R_PPC_REL24:
@@ -407,16 +403,16 @@ bool rel_track::apply_relocations(bool dry_run)
           orig &= 0xFC000003;
           orig |= value & 0x03FFFFFC;
           patch_long(where, orig);
-
-          std::ostringstream ss;
-          ss << it->first.c_str() << "_s" << static_cast<unsigned int>(e->section) << "_REL24_" << reinterpret_cast<void*>(e->addend);
-          do_name_anyway(targ_offset, ss.str().c_str());
-
-          targ_offset += 4;
           break;
         }
         default:
           msg("REL: XTRN RELOC TYPE %u UNSUPPORTED\n", static_cast<unsigned int>(e->type));
+        }
+
+        // Import was used, increment the position
+        if ( e->type != R_DOLPHIN_SECTION && e->type != R_DOLPHIN_NOP )
+        {
+          targ_offset += 4;
         }
       }
     }
@@ -447,4 +443,25 @@ bool rel_track::apply_names(bool dry_run)
   set_libitem(unresolved_addr);
 
   return true;
+}
+
+void rel_track::init_resolvers()
+{
+  uint32_t id;
+  std::string name, path;
+  
+  // Retrieve the directory of the current database
+  char dir[260] = {};
+  if ( !qdirname(dir, sizeof(dir), database_idb) )
+    msg("REL: Unable to get directory of idb file.\n");
+  path = dir;
+
+  // Load the module names
+  m_module_names.clear();
+  std::ifstream modid(path + "/module_id.txt");
+  while( modid >> std::hex >> id >> name )
+    m_module_names[id] = name;
+
+  // Load the function names
+  // TODO: load map files matching module names
 }

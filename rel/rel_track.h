@@ -33,6 +33,9 @@ private:
   bool apply_relocations(bool dry_run = false);
   bool apply_names(bool dry_run = false);
 
+  // Initializes the name and module resolvers
+  void init_resolvers();
+
   //
   uint32_t m_id;
   uint32_t m_version;
@@ -61,7 +64,8 @@ private:
 
   std::vector<section_entry> m_sections;
 
-
+  std::map<uint32_t,std::string> m_module_names;
+  std::map<uint32_t, std::map<uint32_t,std::string> > m_function_names;
 };
 
 #endif // #ifndef __REL_TRACK_H__
