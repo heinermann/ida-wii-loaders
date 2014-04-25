@@ -123,6 +123,8 @@ void idaapi load_file(linput_t *fp, ushort /*neflag*/, const char * /*fileformat
   if ( ph.id != PLFM_PPC )
     set_processor_type("PPC", SETPROC_ALL|SETPROC_FATAL);
 
+  set_compiler_id(COMP_GNU);
+
   // read DOL header into memory
   if (read_header(fp, &dhdr)==0) qexit(1);
   
@@ -143,13 +145,13 @@ void idaapi load_file(linput_t *fp, ushort /*neflag*/, const char * /*fileformat
     sprintf(buf, NAME_CODE "%u", snum);
     
     // add the code segment
-    if (!add_segm(1, dhdr.addressText[i], dhdr.addressText[i]+dhdr.sizeText[i]-1, buf, CLASS_CODE)) qexit(1);
+    if (!add_segm(1, dhdr.addressText[i], dhdr.addressText[i]+dhdr.sizeText[i], buf, CLASS_CODE)) qexit(1);
     
     // set addressing to 32 bit
     set_segm_addressing(getseg(dhdr.addressText[i]), 1);
 
     // and get the content from the file
-    file2base(fp, dhdr.offsetText[i], dhdr.addressText[i], dhdr.addressText[i]+dhdr.sizeText[i]-1, FILEREG_PATCHABLE);
+    file2base(fp, dhdr.offsetText[i], dhdr.addressText[i], dhdr.addressText[i]+dhdr.sizeText[i], FILEREG_PATCHABLE);
   }
 
   // create all data segments
@@ -163,19 +165,19 @@ void idaapi load_file(linput_t *fp, ushort /*neflag*/, const char * /*fileformat
     sprintf(buf, NAME_DATA "%u", snum);
 
     // add the data segment
-    if (!add_segm(1, dhdr.addressData[i], dhdr.addressData[i]+dhdr.sizeData[i]-1, buf, CLASS_DATA)) qexit(1);
+    if (!add_segm(1, dhdr.addressData[i], dhdr.addressData[i]+dhdr.sizeData[i], buf, CLASS_DATA)) qexit(1);
     
     // set addressing to 32 bit
     set_segm_addressing(getseg(dhdr.addressData[i]), 1);
 
     // and get the content from the file
-    file2base(fp, dhdr.offsetData[i], dhdr.addressData[i], dhdr.addressData[i]+dhdr.sizeData[i]-1, FILEREG_PATCHABLE);
+    file2base(fp, dhdr.offsetData[i], dhdr.addressData[i], dhdr.addressData[i]+dhdr.sizeData[i], FILEREG_PATCHABLE);
   }
 
   // is there a BSS defined?
   if (dhdr.addressBSS != NULL) {
     // then add it
-    if(!add_segm(1, dhdr.addressBSS, dhdr.addressBSS+dhdr.sizeBSS-1, NAME_BSS, CLASS_BSS)) qexit(1);
+    if(!add_segm(1, dhdr.addressBSS, dhdr.addressBSS+dhdr.sizeBSS, NAME_BSS, CLASS_BSS)) qexit(1);
 
     // and set addressing mode to 32 bit
     set_segm_addressing(getseg(dhdr.addressBSS), 1);

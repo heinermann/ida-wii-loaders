@@ -5,6 +5,8 @@
 #include <vector>
 #include <map>
 
+#define BASENAME "_BASE_"
+
 struct fxn_naming_entry
 {
   uint32_t m_offset;
@@ -14,6 +16,7 @@ struct fxn_naming_entry
 class rel_track
 {
 public:
+  rel_track();
   rel_track(linput_t *p_input);
 
   bool is_good() const;
@@ -36,6 +39,8 @@ private:
   // Initializes the name and module resolvers
   void init_resolvers();
 
+  uint32_t get_external_offset(std::string const &modulename, uint32_t offset, uint8_t section) const;
+
   //
   uint32_t m_id;
   uint32_t m_version;
@@ -50,8 +55,10 @@ private:
   uint32_t m_import_offset;
   uint32_t m_import_size;
 
-  uint32_t m_bss_section;
+  uint8_t m_bss_section_ign;
   uint32_t m_bss_size;
+
+  uint32_t m_rel_offset;
   //
 
   bool m_valid;
@@ -60,12 +67,17 @@ private:
 
   uint32_t m_next_section_offset;
   uint8_t m_import_section;
+  uint8_t m_internal_bss_section;
   std::map<std::string, std::vector<rel_entry> > m_imports;
 
   std::vector<section_entry> m_sections;
 
   std::map<uint32_t,std::string> m_module_names;
   std::map<uint32_t, std::map<uint32_t,std::string> > m_function_names;
+
+  std::map<std::string, rel_track> m_external_modules;
+
+  friend int idaapi enum_modules_cb(char const * file, rel_track * owner);
 };
 
 #endif // #ifndef __REL_TRACK_H__

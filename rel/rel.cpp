@@ -41,7 +41,7 @@ int idaapi accept_file(linput_t *fp, char fileformatname[MAX_FILE_FORMAT_NAME], 
 *
 */
 
-void idaapi load_file(linput_t *fp, ushort /*neflag*/, const char * /*fileformatname*/)
+void idaapi load_file(linput_t *fp, ushort neflag, const char * /*fileformatname*/)
 {
   // Hello here I am
   msg("---------------------------------------\n");
@@ -52,8 +52,10 @@ void idaapi load_file(linput_t *fp, ushort /*neflag*/, const char * /*fileformat
   if (ph.id != PLFM_PPC)
     set_processor_type("PPC", SETPROC_ALL | SETPROC_FATAL);
 
+  set_compiler_id(COMP_GNU);
+
   rel_track track(fp);
-  inf.beginEA = inf.startIP = START;
+  inf.beginEA = START;
 
   // map selector 1 to 0
   set_selector(1, 0);

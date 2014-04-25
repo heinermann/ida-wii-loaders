@@ -5,6 +5,11 @@
 #include <fstream>
 #include <utility>
 #include <algorithm>
+#include <set>
+
+rel_track::rel_track()
+  : m_valid(false)
+{}
 
 rel_track::rel_track(linput_t *p_input)
  : m_valid(false)
@@ -54,13 +59,13 @@ bool rel_track::read_header()
   //m_base_header.info.next           = swap32(base_header.info.next);
   //m_base_header.info.name_offset    = swap32(base_header.info.name_offset); // ignore
   //m_base_header.info.name_size      = swap32(base_header.info.name_size);   // ignore
-  //m_base_header.rel_offset          = swap32(base_header.rel_offset);
+  m_rel_offset    = swap32(base_header.rel_offset);
 
   m_import_offset = swap32(base_header.import_offset);
   m_import_size   = swap32(base_header.import_size);
   
-  m_bss_section = base_header.bss_section;
-  m_bss_size    = swap32(base_header.bss_size);
+  m_bss_section_ign = base_header.bss_section;
+  m_bss_size        = swap32(base_header.bss_size);
   
   m_prolog_prep.m_offset     = swap32(base_header.prolog_offset);
   m_prolog_prep.m_section_id = base_header.prolog_section;
@@ -98,7 +103,8 @@ bool rel_track::read_sections()
 
     if (entry.offset == 0 && entry.size != 0)   // bss
     {
-
+      if ( entry.size != m_bss_size)
+        return err_msg("BSS section size does not match (%u predicted vs %u declared)", entry.size, m_bss_size);
     }
     else if (entry.offset != 0 && entry.size != 0)  // valid
     {
@@ -212,6 +218,7 @@ bool rel_track::create_sections(bool dry_run)
       offset = m_next_section_offset;
       m_next_section_offset += entry.size;
       entry.offset = offset;
+      m_internal_bss_section = i;
 
       if (!add_segm(1, START + offset, START + offset + entry.size, NAME_BSS, CLASS_BSS))
         return err_msg("Failed to create BSS segment #%u", i);
@@ -232,6 +239,7 @@ bool rel_track::apply_relocations(bool dry_run)
     uint32_t desired_import_size = 0;
     std::map< std::string, std::map<uint32_t, ea_t> > imports_map;
     std::map< std::string, ea_t > imports_module_starts;
+    std::set<ea_t> described;
 
     for (unsigned i = 0; i < count; ++i)
     {
@@ -309,10 +317,12 @@ bool rel_track::apply_relocations(bool dry_run)
       else // EXTERNALS
       {
         // Retrieve the module name
-        std::string imp_module_name = "base";
+        std::string imp_module_name;
         auto it_modname = m_module_names.find(entry.id);
         if ( it_modname != m_module_names.end() )
           imp_module_name = it_modname->second;
+        else if ( entry.id == 0 )
+          imp_module_name = BASENAME;
         else
           imp_module_name = std::string("module") + std::to_string(static_cast<unsigned long long>(entry.id));
 
@@ -334,9 +344,16 @@ bool rel_track::apply_relocations(bool dry_run)
 
           if ( rel.type != R_DOLPHIN_SECTION && rel.type != R_DOLPHIN_NOP )
           {
-            // If the address was not already found, then get the next import location
+            // Retrieve target offset for import itself
             ea_t target_offset = START + m_next_section_offset + desired_import_size;
-            if ( imports_map[imp_module_name].insert( std::make_pair(rel.addend, target_offset) ).second )
+
+            // Also try to get a unique address for the module offset
+            uint32_t offs = this->get_external_offset(imp_module_name, rel.addend, rel.section);
+            if ( offs == 0 || offs == 1 )
+              offs = rel.addend + 0x1000000 * rel.section;
+
+            // If the address doesn't exist, then add it and get the next import location
+            if ( imports_map[imp_module_name].insert( std::make_pair(offs, target_offset) ).second )
             {
               imports_module_starts.insert( std::make_pair(imp_module_name, target_offset) );
               desired_import_size += 4;
@@ -378,14 +395,41 @@ bool rel_track::apply_relocations(bool dry_run)
         // If something is actually going to be done with the target
         if ( e->type != R_DOLPHIN_SECTION && e->type != R_DOLPHIN_NOP )
         {
+          // Retrieve the address that was used to map to the target import
+          uint32_t offs = this->get_external_offset(it->first, e->addend, e->section);
+          if ( offs == 0 || offs == 1 )
+            offs = e->addend + 0x1000000 * e->section;
+
           // Retrieve the target offset for the import
-          targ_offset = imports_map[it->first][e->addend];
+          targ_offset = imports_map[it->first][offs];
           if ( targ_offset == 0 )
             return err_msg("Import was not mapped correctly. %s %08X", it->first.c_str(), e->addend);
 
           // Name the import
           std::ostringstream ss;
-          ss << it->first.c_str() << '_' << reinterpret_cast<void*>(e->addend);
+          ss << it->first;
+
+          offs = this->get_external_offset(it->first, e->addend, e->section);   // re-obtain offs without the unique address generation
+          if ( offs == 0 )
+          {
+            if ( it->first != BASENAME )
+              ss << "_s" << static_cast<unsigned>(e->section) << '_';
+            ss << reinterpret_cast<void*>(e->addend);
+            if ( described.insert(targ_offset).second )
+              describe(targ_offset, true, "addend: %08X; section: %u;", e->addend, static_cast<unsigned>(e->section));
+          }
+          else if ( offs == 1 )
+          {
+            ss << "_s" << static_cast<unsigned>(e->section) << "_bss_" << reinterpret_cast<void*>(e->addend);
+            if ( described.insert(targ_offset).second )
+              describe(targ_offset, true, "addend: %08X; section: %u (BSS);", e->addend, static_cast<unsigned>(e->section));
+          }
+          else
+          {
+            ss << '_' << reinterpret_cast<void*>(offs);
+            if ( described.insert(targ_offset).second )
+              describe(targ_offset, true, "addend: %08X; section: %u; virtual: 0x%08X;", e->addend, static_cast<unsigned>(e->section), START + offs);
+          }
           do_name_anyway(targ_offset, ss.str().c_str());
         }
 
@@ -442,22 +486,38 @@ bool rel_track::apply_relocations(bool dry_run)
 
 bool rel_track::apply_names(bool dry_run)
 {
+  // Describe the binary header
+  add_pgm_cmt("ID: %u", m_id);
+  add_pgm_cmt("Version: %u", m_version);
+  add_pgm_cmt("%u sections @ %08X:", m_num_sections, m_section_offset);
+  for ( unsigned i = 0; i < m_sections.size()-1; ++i ) // -1 because of the fake imports section we added earlier
+  {
+    if ( i == m_internal_bss_section )
+    {
+      add_pgm_cmt("    .bss%u: %u bytes", i, m_sections[i].size);
+    }
+    else if ( m_sections[i].offset != 0 )
+    {
+      if ( m_sections[i].offset & SECTION_EXEC )
+        add_pgm_cmt("    .text%u: %u bytes @ %08X", i, m_sections[i].size, SECTION_OFF(m_sections[i].offset));
+      else
+        add_pgm_cmt("    .data%u: %u bytes @ %08X", i, m_sections[i].size, SECTION_OFF(m_sections[i].offset));
+    }
+  }
+  add_pgm_cmt("Imports: %u bytes @ %08X", m_import_size, m_import_offset);
+  add_pgm_cmt("Relocations @ %08X", m_rel_offset);
+
   // Obtain addresses
   ea_t epilog_addr = section_address(m_epilog_prep.m_section_id, m_epilog_prep.m_offset);
   ea_t prolog_addr = section_address(m_prolog_prep.m_section_id, m_prolog_prep.m_offset);
   ea_t unresolved_addr = section_address(m_unresolved_prep.m_section_id, m_unresolved_prep.m_offset);
 
-  // Make functions
-  auto_make_proc(epilog_addr);
-  auto_make_proc(prolog_addr);
-  auto_make_proc(unresolved_addr);
+  // Make function exports
+  add_entry(epilog_addr, epilog_addr, "epilog", true);
+  add_entry(prolog_addr, prolog_addr, "prolog", true);
+  add_entry(unresolved_addr, unresolved_addr, "unresolved", true);
 
-  set_name(epilog_addr, "epilog", SN_NOCHECK | SN_PUBLIC);
-  set_name(prolog_addr, "prolog", SN_NOCHECK | SN_PUBLIC);
-  set_name(unresolved_addr, "unresolved", SN_NOCHECK | SN_PUBLIC);
-
-  // TODO: Make exports
-
+  // Make library functions (emphasis)
   set_libitem(epilog_addr);
   set_libitem(prolog_addr);
   set_libitem(unresolved_addr);
@@ -465,10 +525,32 @@ bool rel_track::apply_names(bool dry_run)
   return true;
 }
 
+int idaapi enum_modules_cb(char const * file, rel_track * owner)
+{
+  // Load the file
+  linput_t * inp = open_linput(file, false);
+  rel_track rel(inp);
+
+  // If the file is good
+  if ( rel.is_good() )
+  {
+    std::string basename(qbasename(file));
+    std::string modulename = basename.substr(0, basename.find_last_of('.'));
+
+    if ( rel.m_id == 0 )
+      msg("%s id is 0\n", modulename.c_str());
+    owner->m_module_names[rel.m_id] = modulename;
+    owner->m_external_modules[modulename] = rel;
+  }
+
+  // close/cleanup
+  close_linput(inp);
+  return 0;
+}
+
 void rel_track::init_resolvers()
 {
-  uint32_t id;
-  std::string name, path;
+  std::string path;
   
   // Retrieve the directory of the current database
   char dir[260] = {};
@@ -478,10 +560,36 @@ void rel_track::init_resolvers()
 
   // Load the module names
   m_module_names.clear();
-  std::ifstream modid(path + "/module_id.txt");
-  while( modid >> std::hex >> id >> name )
-    m_module_names[id] = name;
+  enumerate_files(nullptr, 0, path.c_str(), "*.rel", reinterpret_cast<int(idaapi*)(char const*,void*)>(&enum_modules_cb), this);
+
+
+  /*std::ifstream modid(path + "/module_id.txt");
+  while( modid >> id >> name )
+    m_module_names[id] = name;*/
 
   // Load the function names
   // TODO: load map files matching module names
+}
+
+uint32_t rel_track::get_external_offset(std::string const &modulename, uint32_t offset, uint8_t section) const
+{
+  auto it = m_external_modules.find(modulename);
+  // Check for existence
+  if ( it == m_external_modules.end() )
+  {
+    return 0;
+  }
+
+  // Check for section validity
+  if ( section >= it->second.m_sections.size() )
+  {
+    msg("REL: Module %s had invalid section reference %u\n", modulename.c_str(), static_cast<unsigned int>(section));
+    return 0;
+  }
+
+  uint32_t section_offset = SECTION_OFF(it->second.m_sections[section].offset);
+  if ( section_offset == 0 )
+    return 1;
+
+  return section_offset + offset;
 }
