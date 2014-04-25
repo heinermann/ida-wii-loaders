@@ -55,8 +55,10 @@ private:
   uint32_t m_import_offset;
   uint32_t m_import_size;
 
-  uint32_t m_bss_section;
+  uint8_t m_bss_section_ign;
   uint32_t m_bss_size;
+
+  uint32_t m_rel_offset;
   //
 
   bool m_valid;
@@ -65,6 +67,7 @@ private:
 
   uint32_t m_next_section_offset;
   uint8_t m_import_section;
+  uint8_t m_internal_bss_section;
   std::map<std::string, std::vector<rel_entry> > m_imports;
 
   std::vector<section_entry> m_sections;

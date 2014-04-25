@@ -59,13 +59,13 @@ bool rel_track::read_header()
   //m_base_header.info.next           = swap32(base_header.info.next);
   //m_base_header.info.name_offset    = swap32(base_header.info.name_offset); // ignore
   //m_base_header.info.name_size      = swap32(base_header.info.name_size);   // ignore
-  //m_base_header.rel_offset          = swap32(base_header.rel_offset);
+  m_rel_offset    = swap32(base_header.rel_offset);
 
   m_import_offset = swap32(base_header.import_offset);
   m_import_size   = swap32(base_header.import_size);
   
-  m_bss_section = base_header.bss_section;
-  m_bss_size    = swap32(base_header.bss_size);
+  m_bss_section_ign = base_header.bss_section;
+  m_bss_size        = swap32(base_header.bss_size);
   
   m_prolog_prep.m_offset     = swap32(base_header.prolog_offset);
   m_prolog_prep.m_section_id = base_header.prolog_section;
@@ -103,7 +103,8 @@ bool rel_track::read_sections()
 
     if (entry.offset == 0 && entry.size != 0)   // bss
     {
-
+      if ( entry.size != m_bss_size)
+        return err_msg("BSS section size does not match (%u predicted vs %u declared)", entry.size, m_bss_size);
     }
     else if (entry.offset != 0 && entry.size != 0)  // valid
     {
@@ -217,6 +218,7 @@ bool rel_track::create_sections(bool dry_run)
       offset = m_next_section_offset;
       m_next_section_offset += entry.size;
       entry.offset = offset;
+      m_internal_bss_section = i;
 
       if (!add_segm(1, START + offset, START + offset + entry.size, NAME_BSS, CLASS_BSS))
         return err_msg("Failed to create BSS segment #%u", i);
@@ -484,6 +486,27 @@ bool rel_track::apply_relocations(bool dry_run)
 
 bool rel_track::apply_names(bool dry_run)
 {
+  // Describe the binary header
+  add_pgm_cmt("ID: %u", m_id);
+  add_pgm_cmt("Version: %u", m_version);
+  add_pgm_cmt("%u sections @ %08X:", m_num_sections, m_section_offset);
+  for ( unsigned i = 0; i < m_sections.size()-1; ++i ) // -1 because of the fake imports section we added earlier
+  {
+    if ( i == m_internal_bss_section )
+    {
+      add_pgm_cmt("    .bss%u: %u bytes", i, m_sections[i].size);
+    }
+    else if ( m_sections[i].offset != 0 )
+    {
+      if ( m_sections[i].offset & SECTION_EXEC )
+        add_pgm_cmt("    .text%u: %u bytes @ %08X", i, m_sections[i].size, SECTION_OFF(m_sections[i].offset));
+      else
+        add_pgm_cmt("    .data%u: %u bytes @ %08X", i, m_sections[i].size, SECTION_OFF(m_sections[i].offset));
+    }
+  }
+  add_pgm_cmt("Imports: %u bytes @ %08X", m_import_size, m_import_offset);
+  add_pgm_cmt("Relocations @ %08X", m_rel_offset);
+
   // Obtain addresses
   ea_t epilog_addr = section_address(m_epilog_prep.m_section_id, m_epilog_prep.m_offset);
   ea_t prolog_addr = section_address(m_prolog_prep.m_section_id, m_prolog_prep.m_offset);
@@ -527,8 +550,7 @@ int idaapi enum_modules_cb(char const * file, rel_track * owner)
 
 void rel_track::init_resolvers()
 {
-  uint32_t id;
-  std::string name, path;
+  std::string path;
   
   // Retrieve the directory of the current database
   char dir[260] = {};
@@ -565,10 +587,9 @@ uint32_t rel_track::get_external_offset(std::string const &modulename, uint32_t 
     return 0;
   }
 
-  uint32_t sec_offset = SECTION_OFF(it->second.m_sections[section].offset);
-
-  if ( sec_offset == 0 )
+  uint32_t section_offset = SECTION_OFF(it->second.m_sections[section].offset);
+  if ( section_offset == 0 )
     return 1;
 
-  return SECTION_OFF(it->second.m_sections[section].offset) + offset;
+  return section_offset + offset;
 }
