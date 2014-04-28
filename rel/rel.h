@@ -77,7 +77,7 @@ typedef struct {
 
 
 typedef struct {
-  uint32_t offset;
+  uint32_t file_offset;
   uint32_t size;
 } section_entry;
 

@@ -13,6 +13,8 @@ struct fxn_naming_entry
   uint8_t  m_section_id;
 };
 
+#define SECTION_IMPORTS 99
+
 class rel_track
 {
 public:
@@ -21,7 +23,7 @@ public:
 
   bool is_good() const;
 
-  section_entry const * get_section(uint entry_id) const;
+  //section_entry const * get_section(uint entry_id) const;
   ea_t section_address(uint8_t section, uint32_t offset = 0) const;
 
   bool apply_patches(bool dry_run = false);
@@ -39,7 +41,7 @@ private:
   // Initializes the name and module resolvers
   void init_resolvers();
 
-  uint32_t get_external_offset(std::string const &modulename, uint32_t offset, uint8_t section) const;
+  uint32_t get_external_offset(std::string const &modulename, uint32_t offset, uint8_t section, bool virt = false) const;
 
   //
   uint32_t m_id;
@@ -65,7 +67,8 @@ private:
   uint32_t m_max_filesize;
   linput_t * m_input_file;
 
-  uint32_t m_next_section_offset;
+  //uint32_t m_next_file_offset;
+  uint32_t m_next_seg_offset;
   uint8_t m_import_section;
   uint8_t m_internal_bss_section;
   std::map<std::string, std::vector<rel_entry> > m_imports;
@@ -74,6 +77,7 @@ private:
 
   std::map<uint32_t,std::string> m_module_names;
   std::map<uint32_t, std::map<uint32_t,std::string> > m_function_names;
+  std::map<uint8_t, uint32_t> m_segment_address_map;
 
   std::map<std::string, rel_track> m_external_modules;
 

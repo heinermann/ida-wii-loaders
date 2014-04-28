@@ -98,18 +98,18 @@ bool rel_track::read_sections()
       return err_msg("REL: Failed to read section %u", i);
 
     // Swap endianness
-    entry.offset  = swap32(entry.offset);
+    entry.file_offset  = swap32(entry.file_offset);
     entry.size    = swap32(entry.size);
 
-    if (entry.offset == 0 && entry.size != 0)   // bss
+    if (entry.file_offset == 0 && entry.size != 0)   // bss
     {
       if ( entry.size != m_bss_size)
         return err_msg("BSS section size does not match (%u predicted vs %u declared)", entry.size, m_bss_size);
     }
-    else if (entry.offset != 0 && entry.size != 0)  // valid
+    else if (entry.file_offset != 0 && entry.size != 0)  // valid
     {
       // Verify boundary
-      if (!verify_section(entry.offset, entry.size))
+      if (!verify_section(entry.file_offset, entry.size))
         return err_msg("REL: Section is out of bounds");
     }
     m_sections.emplace_back(entry);
@@ -145,7 +145,7 @@ bool rel_track::is_good() const
   return m_valid;
 }
 
-section_entry const * rel_track::get_section(uint entry_id) const
+/*section_entry const * rel_track::get_section(uint entry_id) const
 {
   if (entry_id < m_sections.size())
     return &m_sections[entry_id];
@@ -153,11 +153,14 @@ section_entry const * rel_track::get_section(uint entry_id) const
   msg("Attempted to retrieve an invalid section (#%u)", entry_id);
   qexit(1);
   return nullptr;
-}
+}*/
 
 ea_t rel_track::section_address(uint8_t section, uint32_t offset) const
 {
-  return START + SECTION_OFF(this->get_section(section)->offset) + offset;
+  auto it = m_segment_address_map.find(section);
+  if ( it == m_segment_address_map.end() )
+    return BADADDR;
+  return it->second + offset;
 }
 
 bool rel_track::apply_patches(bool dry_run)
@@ -180,7 +183,7 @@ bool rel_track::apply_patches(bool dry_run)
 
 bool rel_track::create_sections(bool dry_run)
 {
-  m_next_section_offset = 0;
+  m_next_seg_offset = START;
 
   // Create sections
   for (size_t i = 0; i < m_sections.size(); ++i)
@@ -188,43 +191,38 @@ bool rel_track::create_sections(bool dry_run)
     auto & entry = m_sections[i];
 
     // Skip unused
-    if ( entry.offset == 0 && entry.size == 0 )
+    if ( entry.file_offset == 0 && entry.size == 0 )
       continue;
 
-    std::string type = (entry.offset & SECTION_EXEC) ? CLASS_CODE : CLASS_DATA;
-    std::string name = (entry.offset & SECTION_EXEC) ? NAME_CODE : NAME_DATA;
+    std::string type = (entry.file_offset & SECTION_EXEC) ? CLASS_CODE : CLASS_DATA;
+    std::string name = (entry.file_offset & SECTION_EXEC) ? NAME_CODE : NAME_DATA;
     name += std::to_string(static_cast<unsigned long long>(i));
 
-    uint32_t offset = SECTION_OFF(entry.offset);
+    m_segment_address_map[i] = m_next_seg_offset;   // record the loaded segment address
+    uint32_t foffset = SECTION_OFF(entry.file_offset);
 
     // Create the segment
-    if ( offset != 0 )  // known segment
+    if ( foffset != 0 )  // known segment
     {
-      if ( offset < m_next_section_offset )
-        return err_msg("Segments are not linear (seg #%u)", i);
-      m_next_section_offset = offset + entry.size;
+      //if ( foffset < m_next_seg_offset )
+        //return err_msg("Segments are not linear (seg #%u)", i);
 
-      if (!add_segm(1, START + offset, START + offset + entry.size, name.c_str(), type.c_str()))
+      if (!add_segm(1, m_next_seg_offset, m_next_seg_offset + entry.size, name.c_str(), type.c_str()))
         return err_msg("Failed to create segment #%u", i);
 
-      // Set 32-bit addressing
-      set_segm_addressing(getseg(START + offset), 1);
-
-      if (!file2base(m_input_file, offset, START + offset, START + offset + entry.size, FILEREG_PATCHABLE))
+      if (!file2base(m_input_file, foffset, m_next_seg_offset, m_next_seg_offset + entry.size, FILEREG_PATCHABLE))
         return err_msg("Failed to pull data from file (segment #%u)", i);
     }
     else  // .bss section
     {
-      offset = m_next_section_offset;
-      m_next_section_offset += entry.size;
-      entry.offset = offset;
       m_internal_bss_section = i;
 
-      if (!add_segm(1, START + offset, START + offset + entry.size, NAME_BSS, CLASS_BSS))
+      if (!add_segm(1, m_next_seg_offset, m_next_seg_offset + entry.size, NAME_BSS, CLASS_BSS))
         return err_msg("Failed to create BSS segment #%u", i);
-
-      set_segm_addressing(getseg(START + offset), 1);
     }
+
+    set_segm_addressing(getseg(m_next_seg_offset), 1);
+    m_next_seg_offset += entry.size;
   }
   return true;
 }
@@ -345,7 +343,7 @@ bool rel_track::apply_relocations(bool dry_run)
           if ( rel.type != R_DOLPHIN_SECTION && rel.type != R_DOLPHIN_NOP )
           {
             // Retrieve target offset for import itself
-            ea_t target_offset = START + m_next_section_offset + desired_import_size;
+            ea_t target_offset = m_next_seg_offset + desired_import_size;
 
             // Also try to get a unique address for the module offset
             uint32_t offs = this->get_external_offset(imp_module_name, rel.addend, rel.section);
@@ -366,15 +364,17 @@ bool rel_track::apply_relocations(bool dry_run)
     } // for each module
     
     // Now create the import/externals section
-    section_entry import_section = { m_next_section_offset, desired_import_size };
-    m_next_section_offset += desired_import_size;
-
-    if (!add_segm(1, START + import_section.offset, START + import_section.offset + import_section.size, NAME_EXTERN, CLASS_EXTERN))
+    uint32_t imp_offset = m_next_seg_offset;
+    m_segment_address_map[SECTION_IMPORTS] = imp_offset;
+    //section_entry import_section = { m_next_section_offset, desired_import_size };
+    m_next_seg_offset += desired_import_size;
+    
+    if (!add_segm(1, imp_offset, imp_offset + desired_import_size, NAME_EXTERN, CLASS_EXTERN))
       return err_msg("Failed to create XTRN segment");
-    set_segm_addressing(getseg(START + import_section.offset), 1);
+    set_segm_addressing(getseg(imp_offset), 1);
     
     m_import_section = static_cast<uint8_t>(m_sections.size());
-    m_sections.emplace_back(import_section);
+    //m_sections.emplace_back(import_section);
 
     // Add and parse imports
     //ea_t targ_offset = this->section_address(m_import_section);
@@ -409,7 +409,7 @@ bool rel_track::apply_relocations(bool dry_run)
           std::ostringstream ss;
           ss << it->first;
 
-          offs = this->get_external_offset(it->first, e->addend, e->section);   // re-obtain offs without the unique address generation
+          offs = this->get_external_offset(it->first, e->addend, e->section, true);   // re-obtain offs without the unique address generation
           if ( offs == 0 )
           {
             if ( it->first != BASENAME )
@@ -428,7 +428,7 @@ bool rel_track::apply_relocations(bool dry_run)
           {
             ss << '_' << reinterpret_cast<void*>(offs);
             if ( described.insert(targ_offset).second )
-              describe(targ_offset, true, "addend: %08X; section: %u; virtual: 0x%08X;", e->addend, static_cast<unsigned>(e->section), START + offs);
+              describe(targ_offset, true, "addend: %08X; section: %u; virtual: 0x%08X;", e->addend, static_cast<unsigned>(e->section), offs);
           }
           do_name_anyway(targ_offset, ss.str().c_str());
         }
@@ -490,18 +490,18 @@ bool rel_track::apply_names(bool dry_run)
   add_pgm_cmt("ID: %u", m_id);
   add_pgm_cmt("Version: %u", m_version);
   add_pgm_cmt("%u sections @ %08X:", m_num_sections, m_section_offset);
-  for ( unsigned i = 0; i < m_sections.size()-1; ++i ) // -1 because of the fake imports section we added earlier
+  for ( unsigned i = 0; i < m_sections.size(); ++i )
   {
     if ( i == m_internal_bss_section )
     {
       add_pgm_cmt("    .bss%u: %u bytes", i, m_sections[i].size);
     }
-    else if ( m_sections[i].offset != 0 )
+    else if ( m_sections[i].file_offset != 0 )
     {
-      if ( m_sections[i].offset & SECTION_EXEC )
-        add_pgm_cmt("    .text%u: %u bytes @ %08X", i, m_sections[i].size, SECTION_OFF(m_sections[i].offset));
+      if ( m_sections[i].file_offset & SECTION_EXEC )
+        add_pgm_cmt("    .text%u: %u bytes @ %08X", i, m_sections[i].size, SECTION_OFF(m_sections[i].file_offset));
       else
-        add_pgm_cmt("    .data%u: %u bytes @ %08X", i, m_sections[i].size, SECTION_OFF(m_sections[i].offset));
+        add_pgm_cmt("    .data%u: %u bytes @ %08X", i, m_sections[i].size, SECTION_OFF(m_sections[i].file_offset));
     }
   }
   add_pgm_cmt("Imports: %u bytes @ %08X", m_import_size, m_import_offset);
@@ -513,9 +513,9 @@ bool rel_track::apply_names(bool dry_run)
   ea_t unresolved_addr = section_address(m_unresolved_prep.m_section_id, m_unresolved_prep.m_offset);
 
   // Make function exports
-  add_entry(epilog_addr, epilog_addr, "epilog", true);
-  add_entry(prolog_addr, prolog_addr, "prolog", true);
-  add_entry(unresolved_addr, unresolved_addr, "unresolved", true);
+  add_entry(epilog_addr, epilog_addr, "_epilog", true);
+  add_entry(prolog_addr, prolog_addr, "_prolog", true);
+  add_entry(unresolved_addr, unresolved_addr, "_unresolved", true);
 
   // Make library functions (emphasis)
   set_libitem(epilog_addr);
@@ -571,7 +571,7 @@ void rel_track::init_resolvers()
   // TODO: load map files matching module names
 }
 
-uint32_t rel_track::get_external_offset(std::string const &modulename, uint32_t offset, uint8_t section) const
+uint32_t rel_track::get_external_offset(std::string const &modulename, uint32_t offset, uint8_t section, bool virt) const
 {
   auto it = m_external_modules.find(modulename);
   // Check for existence
@@ -587,9 +587,19 @@ uint32_t rel_track::get_external_offset(std::string const &modulename, uint32_t 
     return 0;
   }
 
-  uint32_t section_offset = SECTION_OFF(it->second.m_sections[section].offset);
+  uint32_t section_offset = SECTION_OFF(it->second.m_sections[section].file_offset);
   if ( section_offset == 0 )
     return 1;
+
+  uint32_t first_offset = 0;
+  for ( unsigned i = 0; i < it->second.m_sections.size() && first_offset == 0; ++i )
+    first_offset = SECTION_OFF(it->second.m_sections[i].file_offset);
+  
+  if ( virt )
+  {
+    section_offset -= first_offset;
+    section_offset += START;
+  }
 
   return section_offset + offset;
 }
