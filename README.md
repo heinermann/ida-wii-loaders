@@ -10,7 +10,8 @@ The REL and DOL files are found in Nintendo Gamecube/Wii games. This repository 
 A fork of the DOL loader by Stefan Esser, source from [here](http://hitmen.c02.at/html/gc_tools.html).
 
 ### Changes
-* Currently none (will consider bug fixes)
+* Fixed a bug where section sizes would be one less than their actual size.
+* The default compiler is now set to GNU gcc.
 
 ## REL Loader
 A rewrite/fork of the RSO loader by Stephen Simpson, source from [here](https://github.com/Megazig/rso_ida_loader).
